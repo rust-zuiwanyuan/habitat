@@ -779,6 +779,7 @@ impl Client {
         &self,
         pa: &mut PackageArchive,
         token: &str,
+        force_upload: bool,
         progress: Option<D>,
     ) -> Result<()>
     where
@@ -791,6 +792,7 @@ impl Client {
         let file_size = file.metadata()
             .map_err(|e| Error::PackageReadError(pa.path.clone(), e))?
             .len();
+
         let path = package_path(&ident);
         let custom = |url: &mut Url| {
             url.query_pairs_mut().append_pair("checksum", &checksum);
@@ -800,13 +802,17 @@ impl Client {
         let result = if let Some(mut progress) = progress {
             progress.size(file_size);
             let mut reader = TeeReader::new(file, progress);
-            self.add_authz(self.0.post_with_custom_url(&path, custom), token)
-                .body(Body::SizedBody(&mut reader, file_size))
-                .send()
+            self.maybe_force_upload(
+                self.add_authz(self.0.post_with_custom_url(&path, custom), token)
+                    .body(Body::SizedBody(&mut reader, file_size)),
+                force_upload,
+            ).send()
         } else {
-            self.add_authz(self.0.post_with_custom_url(&path, custom), token)
-                .body(Body::SizedBody(&mut file, file_size))
-                .send()
+            self.maybe_force_upload(
+                self.add_authz(self.0.post_with_custom_url(&path, custom), token)
+                    .body(Body::SizedBody(&mut file, file_size)),
+                force_upload,
+            ).send()
         };
         match result {
             Ok(Response {
@@ -999,6 +1005,19 @@ impl Client {
                 Ok((packages, res.status == StatusCode::PartialContent))
             }
             _ => Err(err_from_response(res)),
+        }
+    }
+
+    fn maybe_force_upload<'a>(
+        &'a self,
+        rb: RequestBuilder<'a>,
+        force_upload: bool,
+    ) -> RequestBuilder {
+        header! { (XForce, "X-Force") => [bool] };
+        if force_upload {
+            rb.header(XForce(true))
+        } else {
+            rb
         }
     }
 
